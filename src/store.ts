@@ -1,53 +1,57 @@
-import { JSONArray, JSONObject, JSONPrimitive } from "./json-types";
+import { JSONArray, JSONObject, JSONPrimitive } from './json-types'
 
-export type Permission = "r" | "w" | "rw" | "none";
+export type Permission = 'r' | 'w' | 'rw' | 'none'
 
-export type StoreResult = Store | JSONPrimitive | undefined;
+export type StoreResult = Store | JSONPrimitive | undefined
 
-export type StoreValue =
-  | JSONObject
-  | JSONArray
-  | StoreResult
-  | (() => StoreResult);
+export type StoreValue = JSONObject | JSONArray | StoreResult | (() => StoreResult)
 
 export interface IStore {
-  defaultPolicy: Permission;
-  allowedToRead(key: string): boolean;
-  allowedToWrite(key: string): boolean;
-  read(path: string): StoreResult;
-  write(path: string, value: StoreValue): StoreValue;
-  writeEntries(entries: JSONObject): void;
-  entries(): JSONObject;
+  defaultPolicy: Permission
+  allowedToRead(key: string): boolean
+  allowedToWrite(key: string): boolean
+  read(path: string): StoreResult
+  write(path: string, value: StoreValue): StoreValue
+  writeEntries(entries: JSONObject): void
+  entries(): JSONObject
 }
 
-export function Restrict(...params: unknown[]): any {
-  throw new Error("Method not implemented.");
+const isReadable = (permission: Permission): boolean => permission.includes('r')
+const isWritable = (permission: Permission): boolean => permission.includes('w')
+
+export function Restrict(permission?: Permission): PropertyDecorator {
+  return function (target, propertyKey) {
+    permission = permission ?? (target instanceof Store && target.defaultPolicy ? target.defaultPolicy : 'none')
+    Object.defineProperty(target, propertyKey, { enumerable: isReadable(permission), writable: isWritable(permission) })
+  }
 }
 
 export class Store implements IStore {
-  defaultPolicy: Permission = "rw";
+  defaultPolicy: Permission = 'rw'
 
   allowedToRead(key: string): boolean {
-    throw new Error("Method not implemented.");
+    return Boolean(Object.getOwnPropertyDescriptor(this, key)?.enumerable || !this.hasOwnProperty(key))
   }
 
   allowedToWrite(key: string): boolean {
-    throw new Error("Method not implemented.");
+    return Boolean(Object.getOwnPropertyDescriptor(this, key)?.writable || !this.hasOwnProperty(key))
   }
 
   read(path: string): StoreResult {
-    throw new Error("Method not implemented.");
+    if (!this.allowedToRead(path)) return
+    return Object.getOwnPropertyDescriptor(this, path)?.value
   }
 
   write(path: string, value: StoreValue): StoreValue {
-    throw new Error("Method not implemented.");
+    if (!this.allowedToWrite(path)) return
+    Object.defineProperty(this, path, { value })
   }
 
   writeEntries(entries: JSONObject): void {
-    throw new Error("Method not implemented.");
+    return
   }
 
   entries(): JSONObject {
-    throw new Error("Method not implemented.");
+    return {}
   }
 }
