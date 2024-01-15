@@ -1,4 +1,5 @@
-import { JSONArray, JSONObject, JSONPrimitive } from './json-types'
+import 'reflect-metadata'
+import { JSONArray, JSONObject, JSONPrimitive, JSONValue } from './json-types'
 
 export type Permission = 'r' | 'w' | 'rw' | 'none'
 
@@ -16,13 +17,15 @@ export interface IStore {
   entries(): JSONObject
 }
 
-const isReadable = (permission: Permission): boolean => permission.includes('r')
-const isWritable = (permission: Permission): boolean => permission.includes('w')
+const getNestedKeyRoot = (path: string): string => (path.includes(':') ? path.split(':')[0] : path)
 
 export function Restrict(permission?: Permission): PropertyDecorator {
   return function (target, propertyKey) {
+    if (!Reflect.hasOwnMetadata('permissions', target.constructor)) {
+      Reflect.defineMetadata('permissions', new Map(), target.constructor)
+    }
     permission = permission ?? (target instanceof Store && target.defaultPolicy ? target.defaultPolicy : 'none')
-    Object.defineProperty(target, propertyKey, { enumerable: isReadable(permission), writable: isWritable(permission) })
+    Reflect.getOwnMetadata('permissions', target.constructor).set(propertyKey, permission)
   }
 }
 
@@ -30,25 +33,67 @@ export class Store implements IStore {
   defaultPolicy: Permission = 'rw'
 
   allowedToRead(key: string): boolean {
-    return Boolean(Object.getOwnPropertyDescriptor(this, key)?.enumerable || !this.hasOwnProperty(key))
+    const nestedKeyRoot: string = getNestedKeyRoot(key)
+    return Boolean(
+      Reflect.getMetadata('permissions', this.constructor)?.get(key)?.includes('r') ||
+        (!Reflect.getMetadata('permissions', this.constructor)?.has(key) && this.defaultPolicy.includes('r')) ||
+        Reflect.getMetadata('permissions', this.constructor)?.get(nestedKeyRoot)?.includes('r')
+    )
   }
 
   allowedToWrite(key: string): boolean {
-    return Boolean(Object.getOwnPropertyDescriptor(this, key)?.writable || !this.hasOwnProperty(key))
+    const nestedKeyRoot: string = getNestedKeyRoot(key)
+    return Boolean(
+      Reflect.getMetadata('permissions', this.constructor)?.get(key)?.includes('w') ||
+        (!Reflect.getMetadata('permissions', this.constructor)?.has(key) && this.defaultPolicy.includes('w')) ||
+        Reflect.getMetadata('permissions', this.constructor)?.get(nestedKeyRoot)?.includes('w')
+    )
   }
 
   read(path: string): StoreResult {
-    if (!this.allowedToRead(path)) return
+    if (!this.allowedToRead(path)) throw new Error('No')
+
+    const nestedKeyRoot: string = getNestedKeyRoot(path)
+    if (
+      this.hasOwnProperty(nestedKeyRoot) &&
+      Object.getOwnPropertyDescriptor(this, nestedKeyRoot)?.value instanceof Store
+    ) {
+      const [, ...childStorePath] = path.split(':')
+      return Object.getOwnPropertyDescriptor(this, nestedKeyRoot)?.value.read(childStorePath)
+    }
+
     return Object.getOwnPropertyDescriptor(this, path)?.value
   }
 
   write(path: string, value: StoreValue): StoreValue {
-    if (!this.allowedToWrite(path)) return
-    Object.defineProperty(this, path, { value })
+    if (!this.allowedToWrite(path)) throw new Error('No')
+
+    if (!path.includes(':')) return Object.defineProperty(this, path, { value })
+
+    const pathArray = path.split(':')
+    if (
+      this.hasOwnProperty(pathArray[0]) &&
+      Object.getOwnPropertyDescriptor(this, pathArray[0])?.value instanceof Store
+    ) {
+      pathArray.shift()
+      return Object.getOwnPropertyDescriptor(this, pathArray[0])?.value.write(pathArray.join(':'), value)
+    }
+
+    const newStoreName = pathArray[0]
+    pathArray.shift()
+    Object.defineProperty(this, newStoreName, {
+      value: new Store(),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    })
+    Object.getOwnPropertyDescriptor(this, newStoreName)?.value.write(pathArray.join(':'), value)
   }
 
   writeEntries(entries: JSONObject): void {
-    return
+    for (const key in entries) {
+      this.write(key, entries[key])
+    }
   }
 
   entries(): JSONObject {
